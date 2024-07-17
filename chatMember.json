@@ -1,0 +1,37 @@
+{
+    "update_id": 302277503,
+    "my_chat_member": {
+        "chat": {
+            "id": -4283690249,
+            "title": "test",
+            "type": "group",
+            "all_members_are_administrators": true
+        },
+        "from": {
+            "id": 633897511,
+            "is_bot": false,
+            "first_name": "GRABSON",
+            "username": "GRABS0N",
+            "language_code": "ru"
+        },
+        "date": 1718482298,
+        "old_chat_member": {
+            "user": {
+                "id": 6948010563,
+                "is_bot": true,
+                "first_name": "Слово дня",
+                "username": "slovodnya1337_bot"
+            },
+            "status": "left"
+        },
+        "new_chat_member": {
+            "user": {
+                "id": 6948010563,
+                "is_bot": true,
+                "first_name": "Слово дня",
+                "username": "slovodnya1337_bot"
+            },
+            "status": "member"
+        }
+    }
+}
