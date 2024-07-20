@@ -1,5 +1,4 @@
 import 'dotenv/config'
-
 import { initializeApp } from "firebase/app";
 import { getDatabase, ref, update, set, get, push, orderByChild, equalTo, query, child } from "firebase/database";
 
@@ -138,16 +137,30 @@ function addSchedule(chatId, pattern = '*/5 * * * * *') {
 
 //test command
 bot.command('word', async (ctx) => {
+    let templatePath = 'templates/template_650x400.png';
+    if (!fs.existsSync(templatePath)) {
+        throw new Error(`Файл не найден: ${templatePath}`);
+    }
+    const image = await Jimp.read(templatePath);
+
+    const imageWidth = image.bitmap.width;
+    const imageHeight = image.bitmap.height;
+    const maxTextWidth = imageWidth - 70;
+
+
+    const font = await Jimp.loadFont(Jimp.FONT_SANS_64_BLACK);
     const word = await getRandomWord(1);
-    const translation = await translator.translateText(word, null, 'en-US');
-    const image = new Jimp(800, 600, '#ffffff');
-    const font = await Jimp.loadFont(Jimp.FONT_SANS_32_BLACK);
-    image.print(font, 10, 10, word);
-    image.print(font, 60, 60, translation);
+    // const translation = await translator.translateText(word, null, 'en-US');
+    let textWidth = Jimp.measureText(font, word);
+    let textHeight = Jimp.measureTextHeight(font, word, maxTextWidth);
 
+    const x = (imageWidth - textWidth) / 2;
+    const y = (imageHeight - textHeight) / 2;
 
-    const buffer = await image.getBufferAsync(Jimp.MIME_PNG);
-    fs.writeFileSync('image.png', buffer);
+    image.print(font, x, y, word);
+    // image.print(font, 60, 60, translation);
+    await image.writeAsync('image.png');
+
     await ctx.replyWithPhoto({ source: 'image.png' });
 });
 
