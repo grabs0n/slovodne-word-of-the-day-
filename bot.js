@@ -1,218 +1,148 @@
-import 'dotenv/config'
-import { initializeApp } from "firebase/app";
-import { getDatabase, ref, update, set, get, push, orderByChild, equalTo, query, child } from "firebase/database";
+//TODO: time zones
 
-import fetch from 'node-fetch';
-
+import 'dotenv/config';
 import { Telegraf, Scenes, session } from 'telegraf';
-const { BaseScene, Stage } = Scenes;
-import { CronJob } from 'cron';
 
-import { message } from 'telegraf/filters';
-import Jimp from 'jimp';
-import * as deepl from 'deepl-node';
+import hourScene from './scenes/hourScene.js';
+import languageScene from './scenes/languageScene.js';
 
-import * as fs from "fs";
-const firebaseConfig = {
+import { chatsRef, update, get, push, orderByChild, equalTo, query, onChildChanged, getChatSnapshotById } from './functions/firebase.js';
 
-    apiKey: "AIzaSyCpZylCpnTq2BmABMJE_fY2fyLsvUVRzac",
-    authDomain: "slovodnya-c444d.firebaseapp.com",
-    databaseURL: "https://slovodnya-c444d-default-rtdb.firebaseio.com",
-    projectId: "slovodnya-c444d",
-    storageBucket: "slovodnya-c444d.appspot.com",
-    messagingSenderId: "190691442752",
-    appId: "1:190691442752:web:ad6b14721e47afb1e29fa5",
-    measurementId: "G-BD2WWL8Q1E"
-};
+import { createSchedule, sendWord, changeHour, createPattern } from './functions/createSchedule.js';
+import { Chat } from './consts/chat.js';
+import { CronJob, CronTime } from 'cron';
 
+const { Stage } = Scenes;
 
-const app = initializeApp(firebaseConfig);
-const db = getDatabase(app);
-const chats = ref(db, 'chats');
+const bot = new Telegraf(process.env.BOT_TOKEN, { username: '@slovodnya1337_bot' });
+const stage = new Stage([hourScene, languageScene]);
 
-const bot = new Telegraf(process.env.BOT_TOKEN, { username: '@slovodnya1337_bot' })
-
-const translator = new deepl.Translator(process.env.DEEPL_API_KEY);
-
-async function getRandomWord(number = 1) {
-    let response = await fetch('http://slova.cetba.eu/generate.php?number=' + number)
-        .then(response => response.text());
-    return response;
-}
-
-const apiLanguage = {
-    english: ['en_cz', 'cz_en'],
-    german: ['de_cz', 'cz_de'],
-    french: ['fr_cz', 'cz_fr'],
-    italian: ['it_cz', 'cz_it'],
-    spanish: ['es_cz', 'cz_es'],
-    croatian: ['hr_cz', 'cz_hr'],
-    polish: ['pl_cz', 'cz_pl'],
-    russian: ['ru_cz', 'cz_ru'],
-    slovakian: ['sk_cz', 'cz_sk'],
-    ukrainian: ['uk_cz', 'cz_uk']
-}
-
-async function getTranslation(language, text) {
-    const url = new URL('https://slovnik.seznam.cz/api/slovnik');
-    url.searchParams.append('dictionary', apiLanguage[language][1]);
-    url.searchParams.append('query', text);
-
-    try {
-        const response = await fetch(url);
-
-        if (!response.ok) {
-            throw new Error(`Error: ${response.status} ${response.statusText}`);
-        }
-
-        const data = await response.json();
-        return data;
-    } catch (error) {
-        console.error('Failed to fetch translation:', error);
-        throw error; // Optional: re-throw the error if you want it to be handled by the caller
-    }
-}
-
-class Chat {
-    constructor(chatId) {
-        this.chatId = chatId;
-    }
-}
-
-// Налаштування години
-const hourScene = new BaseScene('hourScene');
-const stage = new Stage([hourScene]);
-hourScene.enter((ctx) => ctx.reply('Введіть о котрій годині бот буде надсилати повідомлення:'));
-hourScene.on('text', async (ctx) => {
-
-    const hour = ctx.message.text;
-    if (isNaN(hour) || hour < 0 || hour > 23) {
-        ctx.reply('Будь ласка, введіть коректну годину (від 0 до 23).');
-    } else {
-        let chatQuery = query(chats, orderByChild('chatId'), equalTo(ctx.chat.id));
-
-        await get(chatQuery).then(async (snapshot) => {
-
-
-            console.log(snapshot.val());
-
-            snapshot.forEach(async (childSnapshot) => {
-                // Get the reference to the specific chat
-                const chatRef = childSnapshot.ref;
-
-                // Update the reference
-                await update(chatRef, { timeConfig: hour });
-            });
-
-
-            ctx.session.hour = hour;
-            ctx.reply(`Час встановлено на ${hour} годину.`);
-            ctx.scene.leave();
-        });
-    }
-});
-
-
-// Додавання middlewares
 bot.use(session({ collectionName: 'sessions' }));
 bot.use(stage.middleware());
 
-// const timeSettingScene = new BaseScene('timeSettingScene');
+onChildChanged(chatsRef, (snapshot) => {
+    const newData = snapshot.val();
+    if (schedules[newData.chatId]) {
+        const changedChatSchedule = schedules[newData.chatId];
+
+        if (newData.status !== changedChatSchedule.running) {
+            if (newData.status)
+                changedChatSchedule.start();
+            else
+                changedChatSchedule.stop();
+        }
 
 
-bot.command('set_hour', (ctx) => ctx.scene.enter('hourScene'));
-
-
-function addSchedule(chatId, pattern = '*/5 * * * * *') {
-    new CronJob(pattern, async function () {
-        let generatedMessage = await getRandomWord();
-        bot.telegram.sendMessage(chatId, generatedMessage)
-    },
-        null,
-        true
-    )
-    // console.log('new cron job for ' + chatId)
-}
-
-
-//test command
-bot.command('word', async (ctx) => {
-    let templatePath = 'templates/template_650x400.png';
-    if (!fs.existsSync(templatePath)) {
-        throw new Error(`Файл не найден: ${templatePath}`);
+        let newTime = new CronTime(createPattern(newData.timeConfig));
+        if (newTime.toString() != changedChatSchedule.cronTime.toString()) {
+            changeHour(changedChatSchedule, newData.timeConfig);
+        }
     }
-    const image = await Jimp.read(templatePath);
-
-    const imageWidth = image.bitmap.width;
-    const imageHeight = image.bitmap.height;
-    const maxTextWidth = imageWidth - 70;
-
-
-    const font = await Jimp.loadFont(Jimp.FONT_SANS_64_BLACK);
-    const word = await getRandomWord(1);
-    // const translation = await translator.translateText(word, null, 'en-US');
-    let textWidth = Jimp.measureText(font, word);
-    let textHeight = Jimp.measureTextHeight(font, word, maxTextWidth);
-
-    const x = (imageWidth - textWidth) / 2;
-    const y = (imageHeight - textHeight) / 2;
-
-    image.print(font, x, y, word);
-    // image.print(font, 60, 60, translation);
-    await image.writeAsync('image.png');
-
-    await ctx.replyWithPhoto({ source: 'image.png' });
+    //added to a new chat
+    else {
+        createSchedule(newData.chatId)
+            .then((schedule) => { schedules[newData.chatId] = schedule });
+    }
+    console.log(newData);
 });
 
-//Додавання чи кік з групи
-bot.on('my_chat_member', (ctx) => {
+bot.command('set_hour', (ctx) => ctx.scene.enter('hourScene'));
+bot.command('word', async (ctx) => {
+    if (ctx.chat.id == process.env.ADMIN_ID) {
+        sendWord(ctx.chat.id)
+    }
+    else {
+        ctx.reply('You can not use this command');
+    }
+});
+
+bot.command('set_language', (ctx) => ctx.scene.enter('languageScene'));
+bot.command('on', async (ctx) => {
+    const chatSnapshot = await getChatSnapshotById(ctx.chat.id)
+    const chatRef = chatSnapshot.ref;
+    await update(chatRef, { status: true });
+    ctx.reply('Schedule was turned on, word of the day will be sent at ' + chatSnapshot.val().timeConfig +
+        '\nIf you want to change it use /set_hour');
+});
+bot.command('off', async (ctx) => {
+    turnOffInChat(ctx.chat.id);
+    ctx.reply('Schedule was turned off');
+});
+
+function handleNewChat(newChatId) {
+    let newChatQuery = query(chatsRef, orderByChild('chatId'), equalTo(newChatId));
+    get(newChatQuery).then(async snapshot => {
+        if (!snapshot.exists()) {
+            let chat = new Chat(newChatId);
+            await push(chatsRef, chat);
+            createSchedule(newChatId)
+                .then((schedule) => { schedules[newChatId] = schedule });
+        }
+    });
+}
+
+async function turnOffInChat(chatId) {
+    const chatRef = (await getChatSnapshotById(chatId)).ref;
+    await update(chatRef, { status: false });
+}
+
+let welcomeMessage = "Hi, nice to meet you. I can send a random czech word every day at the hour you want. Here is the list of commands that I can understand:\n" +
+    "/on - turn on the schedule (by default it's turned off)\n" +
+    "/off - turn off the schedule\n" +
+    "/set_hour - set the hour when I should send you words\n" +
+    "/set_language - set your primary language; I will translate words to this language for you";
+// Добавление или удаление бота из группы
+bot.on('my_chat_member', async (ctx) => {
     const chatMemberUpdate = ctx.update.my_chat_member;
+    const chatId = chatMemberUpdate.chat.id;
     const newStatus = chatMemberUpdate.new_chat_member.status;
     const oldStatus = chatMemberUpdate.old_chat_member.status;
 
+    if (newStatus === 'kicked') {
+        console.log(`Bot was blocked by user in chat ${chatId}`);
+        turnOffInChat(chatId);
+    }
 
-    // Check if the bot's status has changed to "member"
     if (oldStatus !== 'member' && newStatus === 'member') {
-        const newChatId = chatMemberUpdate.chat.id;
-        let newChatQuery = query(chats, orderByChild('chatId'), equalTo(newChatId));
-        get(newChatQuery).then(async snapshot => {
-            if (snapshot.exists()) {
-            }
-            else {
-                let chat = new Chat(newChatId);
-                await push(chats, chat);
-                addSchedule(newChatId);
-            }
-        })
+        handleNewChat(chatId);
+        ctx.reply(welcomeMessage)
+    }
 
-        console.log('Bot was added to a new chat with ID:', newChatId);
-
-
-        // Send a welcome message to the new chat
-        ctx.telegram.sendMessage(newChatId, 'Hello! Thank you for adding me to the chat.');
+    else {
+        const chatRef = (await getChatSnapshotById(chatId)).ref;
+        update(chatRef, { status: false });
     }
 });
 
+bot.start((ctx) => {
+    if (ctx.message.chat.type === 'private') {
+        handleNewChat(ctx.chat.id);
+        ctx.reply(welcomeMessage);
+        console.log('Бот запущен пользователем в личном чате');
+    }
+});
 
 bot.launch().then(console.log("✅ Running..."));
 
 //Запуск розкладів
 
-// get(chats).then(snapshot => {
-//     let value = snapshot.val();
-//     console.log(value)
-//     for (let chat in value) {
-//         let object = value[chat];
+let schedules = {};
 
-//         if (object.chatId) {
-//             if (object.timeConfig) {
-//                 addSchedule(object.chatId, `*/${object.timeConfig} * * * * *`)
-//             }
-//             // console.log('added schedule for ' + value[chat].chatId)
-//         }
-//     }
-// })
+
+get(chatsRef).then(snapshot => {
+    let value = snapshot.val();
+    for (let chat in value) {
+        let object = value[chat];
+        if (object.timeConfig) {
+            createSchedule(object.chatId)
+                .then((schedule) => { schedules[object.chatId] = schedule });
+        }
+    }
+    console.log("Schedules running")
+})
 
 // Enable graceful stop
 process.once('SIGINT', () => bot.stop('SIGINT'))
 process.once('SIGTERM', () => bot.stop('SIGTERM'))
+
+export default bot;
